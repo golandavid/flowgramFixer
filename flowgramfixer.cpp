@@ -29,8 +29,12 @@ double global_sd_end;
 double global_sd; 
 int UNDERFLOW_CONST=2;
 
+
 int TRANS_INC[4][16]; 
 int TRANS_NO_INC[4][16]; 
+
+#define PRIOR_TABLE_SIZE 20
+double BAYES_PRIOR[4][PRIOR_TABLE_SIZE];
 
 //class for a single state (SState)
 //
@@ -134,17 +138,20 @@ double obs_given_no_incorp (double obs, char wash, int wash_index, double sd) {
 
 double obs_given_incorp(double obs, char wash, int wash_index, int & which_max, double sd) {
 	double content_prob;
-	if ((wash == 'A') || (wash == 'T')) {
+	if ((wash == 'a') || (wash == 't')) {
 		content_prob = (1 - gc_content) / 2;
 	} else {
 		content_prob = (gc_content) / 2;
 	}
+	// make sure we do not go over the prior table size 
 	double M = max(round(obs + 0.5) + 2, 4.0);
+	if(M>PRIOR_TABLE_SIZE){M=PRIOR_TABLE_SIZE;}
 
 	double max_lik = -1;
 	which_max = -1;
 	for (int i = 0; i < M; i++) {
-		double prob = dgeom(i+1, 1 - content_prob); // note that we are conditioning on the fact that we have an incorporation
+//		double prob = dgeom(i+1, 1 - content_prob); // note that we are conditioning on the fact that we have an incorporation
+		double prob = BAYES_PRIOR[nt2num(wash)][i];
 		double mean = i + 1;
 		double lik = prob * dnorm(obs, mean, sd);
 		if (lik >= max_lik) {
@@ -157,7 +164,7 @@ double obs_given_incorp(double obs, char wash, int wash_index, int & which_max, 
 
 double obs_given_incorp_forward(double obs, char wash, int wash_index, double sd) {
 	double content_prob;
-	if ((wash == 'A') || (wash == 'T')) {
+	if ((wash == 'a') || (wash == 't')) {
 		content_prob = (1 - gc_content) / 2;
 	} else {
 		content_prob = (gc_content) / 2;
@@ -222,6 +229,16 @@ void create_transitions(){
 		for (int wash = 0; wash < 4; wash++){ 
 			TRANS_INC[wash][i] = SState(i).see(wash)->num() ; 
 			TRANS_NO_INC[wash][i] = SState(i).skip(wash)->num() ; 
+		}
+	}
+	return;
+}
+
+void init_priors(){
+	gc_content=0.5; 
+	for(int nuc=0 ; nuc<4 ;nuc++){
+		for(int mer=0; mer < 20 ; mer++){
+			BAYES_PRIOR[nuc][mer] = dgeom(mer+1, 1 - gc_content/2);
 		}
 	}
 	return;
@@ -433,6 +450,68 @@ string flow_to_seq(vector<int> seq, string washs){
 	return retval;
 }
 
+
+void update_priors(string filename, string washs){
+	// init counters
+	unsigned int gc_counter = 0 ;
+	unsigned int gc_total = 0 ; 
+	double mer_counters[4][PRIOR_TABLE_SIZE] ; 
+	unsigned int mer_total[4] = {0,0,0,0} ;
+	for(int i = 0 ; i < 4 ; i++){
+		for(int j = 0 ; j < PRIOR_TABLE_SIZE ; j++){
+			mer_counters[i][j] = 0 ; 
+		}
+	}
+
+	// open file, use rounding to call sequences, and compute the various priors.
+	ifstream all_obss_file;
+	open_file(all_obss_file, filename);
+
+
+	vector<string> row;
+	while (get_row(all_obss_file, row, ' ')) {
+		for (int i = 0; i < row.size(); i++){
+			int curr=round(atof(row[i].c_str()));
+			if(curr==0){continue;}
+			char curr_wash = washs.at(i%washs.length()); 
+			int curr_nuc = nt2num(curr_wash) ; 
+			// update GC content counters
+			if(curr_wash=='c' || curr_wash=='g'){
+				gc_counter += curr;
+			}
+			gc_total += curr ; 
+			// update homopolymer counters
+			mer_counters[curr_nuc][min(curr,PRIOR_TABLE_SIZE)-1]++; 
+			mer_total[curr_nuc]++;
+		}
+	}
+	// compute actual priors 
+	cout << "gc before:" << gc_content << endl;
+	gc_content = double(gc_counter)/double(gc_total);
+	cout << "gc after:" << gc_content << endl;
+	for(int i = 0 ; i < 4 ; i++){
+		for(int j = 0 ; j < PRIOR_TABLE_SIZE ; j++){
+			BAYES_PRIOR[i][j] = double(mer_counters[i][j])/double(mer_total[i]) ; 
+		}
+	}
+
+	return; 
+}
+void write_priors_to_file(string filename){
+	ofstream of ; 
+	open_file(of, filename);
+	of << "GC content:" << gc_content << endl;;
+	of << "prior table" << endl; 
+	for(int i = 0 ; i < 4 ; i++){
+		for(int j = 0 ; j < PRIOR_TABLE_SIZE ; j++){
+			of << BAYES_PRIOR[i][j] << "\t" ;
+		}
+		of << endl; 
+	}
+	return; 
+}
+	
+
 void usage(int argc, char * argv[]) {
 	cerr << "Usage: " << argv[0] << " incorporation_file output_file [mode]" << endl;
 	cerr << "Program descrption:\nincorporation_file is space delimited file of incorporation sequences" << endl;
@@ -456,10 +535,10 @@ void trim_obs(vector<double>& obs){
 
 int main(int argc, char * argv[]) {
 
-	if ( (argc!=4) ) usage(argc,argv);
+	if ( (argc<4) ) usage(argc,argv);
 
 	string washs = "tacgtacgtctgagcatcgatcgatgtacagc";
-	gc_content = 0.5;
+	init_priors(); 
 
 	string output_filename(argv[2]); 
 	bool trend,intercept,constant;
@@ -482,6 +561,14 @@ int main(int argc, char * argv[]) {
 	}else{
 		usage(argc,argv); 
 	}
+	if(argc==5 && string(argv[4])=="bayes"){
+		cout << "Empirical Bayes" << endl; 
+		update_priors(string(argv[1]),washs); 
+	}
+	else{
+		cout << "no bayes" << endl; 
+	}
+	write_priors_to_file(string(argv[2]) + ".priors");
 	
 	//build TRANS_PROBS 
 	create_transition_probs(gc_content);
