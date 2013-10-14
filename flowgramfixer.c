@@ -14,6 +14,9 @@
 #include <ctype.h>
 #include <float.h>
 #include <math.h>
+#include <pthread.h>
+#include <unistd.h>
+//#define NUM_THREADS   10
 
 #define negInf (-DBL_MAX)
 
@@ -65,6 +68,19 @@ typedef double realrow[NUM_STATES];
 
 double TRANS_PROBS[NUM_STATES][NUM_STATES][4];
 
+// Pass values to threads.
+typedef struct thread_data{
+   char* chunk_in;
+   char* chunk_out;
+   char* washSequence;
+   int mode;
+   double sd_trend;
+   double sd_start;
+   double step_size;
+}thread_data;
+//define structures to pass to parameters to threads
+//thread_data td[NUM_THREADS];
+
 // state for reading text files line-by-line; see read_line()
 
 typedef struct filestate {
@@ -98,10 +114,19 @@ int main (int argc, char** argv);
 
 static void    usage                   (char* programName);
 
-
+void 		get_ml_estimates	(char * filename, double step_size, char* washSequence,  double *sample_intercept,double *sample_trend );
+void*		thread_call		( void *thread_arg);
+char* 		concat			(char *s1, char *s2);
+void 		split_sff 		(int parts, char* filename, char* chunk_names[], double percent);
+unsigned long 	count_lines		(char *filename);
+void 		join_seq		(char* out_file, int n);
+void 		join_lik		(char* out_file, int n);
+void 		delete_chunks		(char* out_file, int n);
+void 		delete_intermediates	(char* out_file, int n);
 void 		   fill_const			   (double* params, int paramsLen, double fill);
 
 void 		   fill_trend			   (double* params, int paramsLen, double intercept, double trend);
+void 		return_optimal_trend_intercept_greedy (double* obss, int obssLen, double* params, char* washSequence, double int_start, double trend_start, double int_step, double trend_step, double *intercept_return, double *trend_return );
 void 		   find_optimal_const_sigma (double* obss,int obssLen,double* params, char* washSequence, double start,	 double end, int steps);
 double 		   find_optimal_trend_sigma (double* obss,int obssLen,double* params, char* washSequence, double int_start, double int_end,	 double trend_start, double trend_end, int int_steps, int trend_steps);
 double 		   find_optimal_trend_only (double* obss,int obssLen,double* params, char* washSequence, double intercept, double trend_start, double trend_end, int trend_steps);
@@ -158,15 +183,18 @@ static char*   skip_darkspace          (char* s);
 static void usage
    (char* programName)
 	{
-	fprintf (stderr, "usage: %s incorporation_file output_file dist param1 param2\n", programName);
+	fprintf (stderr, "usage: %s -i incorporation_file -o output_file -d dist -m mode \n", programName);
 	fprintf (stderr, "\n");
-	fprintf (stderr, "incorporation_file is space delimited file of incorporation sequences\n");
-	fprintf (stderr, "output_file is the prefix for all output files\n");
-	fprintf (stderr, "dist is the distribution to be used in the likelihood (exp/normal)\n");
-	fprintf (stderr, "param1 can be greedy/trend (greedy is greedy search, trend is grid search\n");
-	fprintf (stderr, "param2 is an additional parameter for the greedy algorithm (step size - default is 1, larger step size runs faster) \n");
-	fprintf (stderr, "alternatively, if param1 and param2 are numbers, they are taken to be the  intercept and trend for the noise model of all the reads\n");
-	
+	fprintf (stderr, "-i incorporation_file is space delimited file of incorporation sequences\n");
+	fprintf (stderr, "-o output_file is the prefix for all output files\n");
+	fprintf (stderr, "-d dist is the distribution to be used in the likelihood (exp/normal)\n");
+	fprintf (stderr, "-m can be greedy/trend/const (greedy is greedy search, trend is grid search, const is user defined)\n");
+	fprintf (stderr, "-s is an additional parameter for the greedy algorithm (step size - default is 1, larger step size runs faster) \n");
+	fprintf (stderr, "-p percentage of sequences used to generate the intercept and trend, additional parameter for greedy algorithm\n");
+	fprintf (stderr, "-x the  intercept for the noise model of all the reads, set when mode is const\n");
+	fprintf (stderr, "-y the  trend for the noise model of all the reads, set when mode is const\n");	
+	fprintf (stderr, "-t number of threads used to run the program (default is 5)\n");
+
 	exit (EXIT_FAILURE);
 	}
 
@@ -226,141 +254,597 @@ static void usage
 
 
 //--- main ---
+int  main (int argc, char **argv)
+     {
+       char *inputflag = NULL;
+       char *outputflag = NULL;
+       char *dist_flag = NULL;
+       char *mode_flag = NULL;
+       char *percent_flag = "1";
+       char *threadflag= "5";
+       char *stepsize_flag="1";
+       char *intercept_flag=NULL;
+       char *trend_flag=NULL;
+       int index;
+       int c;
+     
+       opterr = 0;
+     //
+       while ((c = getopt (argc, argv, "i:o:d:m:p:t:x:y:")) != -1)
+         switch (c)
+           {
+           case 'i':
+             inputflag = optarg;
+             break;
+           case 'o':
+             outputflag = optarg;
+             break;
+           case 'd':
+             dist_flag = optarg;
+             break;
+           case 'm':
+             mode_flag = optarg;
+             break;
+           case 'p':
+             percent_flag = optarg;
+             break;
+           case 't':
+             threadflag = optarg;
+             break;
+           case 'x':
+             intercept_flag = optarg;
+             break;
+           case 'y':
+             trend_flag = optarg;
+             break;
+           case 's':
+             stepsize_flag = optarg;
+             break;
+           case '?':
+             if (optopt == 'i')
+               fprintf (stderr, "Option -%c requires an argument.\n", optopt);
+             else if (optopt == 'o')
+               fprintf (stderr, "Option -%c requires an argument.\n", optopt);
+             else if (optopt == 'd')
+               fprintf (stderr, "Option -%c requires an argument.\n", optopt);
+             else if (optopt == 'm')
+               fprintf (stderr, "Option -%c requires an argument.\n", optopt);
+             else if (optopt == 'p')
+               fprintf (stderr, "Option -%c requires an argument or ommit the flag to set the default value.\n", optopt);
+             else if (optopt == 't')
+               fprintf (stderr, "Option -%c requires an argument or ommit the flag to set the default value.\n", optopt);
+             else if (optopt == 's')
+               fprintf (stderr, "Option -%c requires an argument or ommit the flag to set the default value.\n", optopt);
+             else if (optopt == 'x')
+               fprintf (stderr, "Option -%c requires an argument.\n", optopt);
+             else if (optopt == 'y')
+               fprintf (stderr, "Option -%c requires an argument.\n", optopt);
+             else if (isprint (optopt))
+               fprintf (stderr, "Unknown option `-%c'.\n", optopt);
+             else
+               fprintf (stderr,
+                        "Unknown option character `\\x%x'.\n",
+                        optopt);
+             return 1;
+           default:
+             abort ();
+           }
 
-int main
-   (int			argc,
-	char**		argv)
-	{
-	char*		washSequence;
+       for (index = optind; index < argc; index++)
+         printf ("Non-option argument %s\n", argv[index]);
+         
+       	char*		washSequence;
 	char*		allObssFilename;
 	char*		outputTemplate;
-	FILE*		allObssF, *likF, *seqF;
-	filestate	allObssState;
 	int			readNumber;
-	int			i,j;
+	
 	double step_size;  
 	
-	if (argc != 5 && argc != 6) usage (argv[0]);
-
-	allObssFilename = argv[1];
-	outputTemplate  = argv[2];
-	// parse dist arg 
-	if(strcmp(argv[3],"normal")==0){
+	if (inputflag == NULL) {printf("-i flag is missing\n");usage (argv[0]);}
+	if (outputflag == NULL){printf("-o flag is missing\n");usage (argv[0]);}
+	if (dist_flag == NULL) {printf("-d flag is missing\n");usage (argv[0]);}
+	if (mode_flag == NULL) {printf("-m flag is missing\n");usage (argv[0]);}
+	
+	allObssFilename = inputflag;
+	outputTemplate  = outputflag;
+	 ////parse dist arg 
+	if(strcmp(dist_flag,"normal")==0){
 		dist=NORMAL; 
-	}else if(strcmp(argv[3],"exp")==0){
+	}else if(strcmp(dist_flag,"exp")==0){
 		dist=EXP; 
 	}else{
+		printf("-d flag invalid value\n");
 		usage(argv[0]);
 	}
 
-	// parse param arg, which gives us the mode
-	if(strcmp(argv[4],"intercept")==0){
+	//// parse param arg, which gives us the mode
+	if(strcmp(mode_flag,"intercept")==0){
 		mode=INTERCEPT; 
-	}else if(strcmp(argv[4],"trend")==0){
+	}else if(strcmp(mode_flag,"trend")==0){
 		mode=TREND; 
-	}else if(strcmp(argv[4],"trendOnly")==0){
+	}else if(strcmp(mode_flag,"trendOnly")==0){
 		mode=TREND_ONLY;
-		sd_start=string_to_double (argv[5]);
-	}else if(strcmp(argv[4],"greedy")==0){
+		sd_start=string_to_double (intercept_flag);
+	}else if(strcmp(mode_flag,"greedy")==0){
 		mode=GREEDY ; 
-		if(argc==6){
-			step_size = string_to_double(argv[5]);
-		}else{
-			step_size = 1; 
-		}
-	}else{
+		step_size = string_to_double(stepsize_flag);
+		
+	}else if(strcmp(mode_flag,"const")==0){
 		mode=CONST; 
-		sd_start  = string_to_double (argv[4]);
-		if(argc==6){
-			sd_trend  = string_to_double (argv[5]);
+		sd_start  = string_to_double (trend_flag);
+		if(intercept_flag!=NULL){
+			sd_trend  = string_to_double (intercept_flag);
 		}else{
 			sd_trend = 0 ; 
 		}
+	}else{
+		printf("-m flag invalid value\n");
+		usage(argv[0]);
 	}
+     
 	
-	printf("Using the %s distribution (%d) with mode %s %s(%d)\n",argv[3],dist,argv[4],argv[5],mode);
+	printf("Using the %s distribution (%d) with mode %s (%d)\n",dist_flag,dist,mode_flag,mode);
 
 	gcContent = 0.5;
 	washSequence = defaultWashSequence;
+	int NUM_THREADS=atoi(threadflag);
+	thread_data td[NUM_THREADS];
 
-	// read the additional two arguments 
-	// build TRANS_PROBS
-
-	create_transition_probs (gcContent);
-
-	// run viterbi on all strings and dump to files
-
-	allObssF = open_file (allObssFilename, NULL, "rt");
-	init_read_line (&allObssState, allObssFilename);
-	likF    = open_file (outputTemplate, ".lik", "wt");
-	seqF     = open_file (outputTemplate, ".seq",  "wt");
-
-	readNumber = 0;
-	while (true)
-		{
-		double* obss;
-		double*    params;
-		int*    seq;
-		int		obssLen;
-		int		seqLen;
-		double lik ;
-		lik=0;
-		
-		obss = get_observations (allObssF, &allObssState, &obssLen);
-		if (obss == NULL) break;
-		readNumber++;
-		debugObssLength_1;
-		zero_trim_observations (obss, &obssLen);
-		debugObssLength_2;
-
-		params = malloc(obssLen * sizeof(double));
-		if(mode==CONST){
-			fill_trend(params,obssLen,sd_start,sd_trend) ; 
-			seq = viterbi (obss, obssLen, params, washSequence, &seqLen);
-		}else if(mode==INTERCEPT){
-			find_optimal_const_sigma(obss, obssLen, params, washSequence,0,0.2,10);
-			seq = viterbi (obss, obssLen, params, washSequence, &seqLen);
-		}else if(mode==TREND_ONLY){
-			lik=find_optimal_trend_only(obss, obssLen, params, washSequence,sd_start,0,0.0005,10);
-			seq = viterbi (obss, obssLen, params, washSequence, &seqLen);
-		}else if(mode==GREEDY){
-			lik=find_optimal_trend_greedy(obss, obssLen, params, washSequence,0.03,0.0002,0.001*step_size,0.00001*step_size);
-			seq = viterbi (obss, obssLen, params, washSequence, &seqLen);
-		}else{ // mode is trend 
-			lik=find_optimal_trend_sigma(obss, obssLen, params, washSequence,0,0.1,0,0.0005,10,20);
-			seq = viterbi (obss, obssLen, params, washSequence, &seqLen);
-		}
-		fprintf(likF,"%f\t%f\t%f\n",params[0],params[1]-params[0],lik);
-			debugSeqLength_1
-
-		// write flow to file
-
-/*		for (j=0 ; j<seqLen-1 ; j++)
-			fprintf (flowF, "%d,", seq[j]);
-		fprintf (flowF, "%d\n", seq[seqLen-1]);
-*/
-		// write string to file
-
-		write_flow_as_nts (seqF, seq, seqLen, washSequence);
-		free (params);
-		free (obss);
-		free (seq);
-		fflush(likF);
-		fflush(seqF);
-		}
-
+	char* sffchunks[NUM_THREADS];
+	double sample_intercept;
+	double sample_trend;
 	
+	//Splitting the input flowgram into smaller files
+	// the file created have the same input name with attached "_0NN" where NN is the number of threads 01 to 10..
+	double percent_seq=atof(percent_flag);
+	split_sff(NUM_THREADS,allObssFilename,sffchunks, percent_seq);
+	//Obtain the mean intercept and trend from subsample(1%) of the input flowgram.
+	if(mode=GREEDY){
+	 printf("Averaged from %f%% of the data: \n",percent_seq);
+	 get_ml_estimates(allObssFilename,step_size,washSequence,&sample_intercept,&sample_trend);
+	 sd_start=sample_intercept;
+	 sd_trend=sample_trend;
+	 mode=CONST;
+	 printf("intercept\t%f\ntrend\t%f\n",sd_start,sd_trend);
+	}
+
+	int rc, id, idx;
+	char chunk_f[NUM_THREADS][100], chunk_o[NUM_THREADS][100];
+	//initialize the threads and make them joinable
+	pthread_t threads[NUM_THREADS];
+	pthread_attr_t attr;
+	pthread_attr_init(&attr);
+   	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
+   	
+   	//Perform base calling using multiple threads
+	for( id=0; id<NUM_THREADS; id++){
+	      char * washSeq= washSequence;	     
+	      //generating the input and output files sssent to thread.
+	      sprintf(chunk_f[id], "%s_%03d", allObssFilename,id);
+	      sprintf(chunk_o[id],"%s_%03d", outputTemplate,id);
+	      //assign values to struct  
+	      td[id].chunk_in = chunk_f[id];
+	      td[id].washSequence = washSeq;
+	      td[id].sd_trend = sd_trend;
+	      td[id].mode = mode;
+	      td[id].sd_start = sd_start;
+	      td[id].chunk_out= chunk_o[id];
+	      td[id].step_size=step_size;
+	      //   printf("%s\n",td[id].chunk_in);
+	      //Creating the threads and calling the function
+	      rc = pthread_create(&threads[id], &attr, thread_call, (void *) &td[id] );
+	      if (rc){
+        	 printf("Error:unable to create thread\n");
+	         exit(-1);
+	      }
+	      	      
+	}
+	//Joining the threads
+	pthread_attr_destroy(&attr);
+	for(idx=0; idx<NUM_THREADS; idx++){
+	rc = pthread_join(threads[idx], NULL);
+	      if (rc){
+	         printf("Error:unable to join\n");
+	       	 exit(-1);
+	      }
+	}      
+
+//Joining the output files generated by each individual thread		
+    join_seq(outputTemplate,NUM_THREADS);   
+    join_lik(outputTemplate,NUM_THREADS); 
+//Deleting the intermediate files
+    delete_chunks(allObssFilename,NUM_THREADS);
+    delete_intermediates(outputTemplate,NUM_THREADS);
+    pthread_exit(NULL);
+ return EXIT_SUCCESS;
+}
+
+
+//From the one percent subsample generated using split_sff(), the intercept and trend are generated using greedy approach(return_optimal_trend_intercept_greedy()) for each flow
+//and the mean of all the intercepts and trend is updated. 
+//
+void get_ml_estimates(char * filename, double step_size, char* washSequence, double *sample_intercept,double *sample_trend ){
+
+ char fname[100];
+ double sum_i=0, sum_t=0;
+ sprintf(fname, "%s_subsample", filename);
+ FILE *subset = fopen(fname, "rt");
+ create_transition_probs (gcContent);
+ int	readNumber = 0; 
+ char	line[1000*6+1];
+//printf("%s\n",fname);
+ while (fgets (line, sizeof(line), subset) != NULL) {
+//printf("%d\n",readNumber);
+	double* obss;
+	double*    params;
+	int		obssLen;
+	int		seqLen;
+	double lik ;
+	double intercept_return;
+	double trend_return; 
+
+	lik=0;
+	//get_observation
+		//pthread_mutex_unlock(&mutex);
+		obss = malloc(sizeof(double)*sizeof(line));
+		char *saveptr1;
+		//printf("%s\n",line);
+		double		v;
+		char		extra;
+		const char s[2] = " ";
+		char* temp_num;
+		temp_num = strtok_r(line,s,&saveptr1);//split string
+		int e_num = 0;
+   		 while(temp_num != NULL)
+    		{
+ 			double tmp_d=atof(strdup(temp_num));
+ 			//sscanf(temp_num, "%lf", &tmp_d);
+        		obss[e_num] = tmp_d;
+        		//printf("%f\n",tmp_d);
+		        temp_num = strtok_r(NULL,s,&saveptr1);
+		        e_num++;
+		}
+        obssLen=e_num;
+	
+	if (obss == NULL) break;
+  	readNumber++;
+	debugObssLength_1;
+	zero_trim_observations (obss, &obssLen);
+	debugObssLength_2;
+	params = malloc(obssLen * sizeof(double));
+	return_optimal_trend_intercept_greedy(obss, obssLen, params, washSequence,0.03,0.0002,0.001*step_size,0.00001*step_size, &intercept_return,&trend_return);
+	//printf("%f\t%f\n",intercept_return,trend_return); 
+	sum_i+=intercept_return;
+	sum_t+=trend_return;
+	free (params);
+	free (obss);
+	 	
+  }
+   
+ *sample_intercept=(sum_i/readNumber);
+ *sample_trend=(sum_t/readNumber);
+ 
+}
+
+
+// This is the function which is called in each thread
+// It process each chunk independently writes the resulting output to output_0NN.lik and outpt_0NN.seq files
+// 
+void *thread_call( void *targ)
+{
+  //the GC content is set to 0.5 by default
+ double gcContent = 0.5;
+ 
+ create_transition_probs (gcContent);
+ //the struct thread_data which includes the parameters sent to each thread is initiated. 
+ thread_data* arg= (thread_data*) targ;
+
+ filestate	allObssState;
+ int			readNumber;
+ int			i,j;
+ char	line[1000*6+1];
+//reads the input file and initiates the file handel for output files.
+ FILE *allObssF,*likF,*seqF;
+ allObssF = open_file (arg->chunk_in, NULL, "rt");
+ init_read_line (&allObssState, arg->chunk_in);
+ likF    = open_file (arg->chunk_out, ".lik", "wt");
+ seqF     = open_file (arg->chunk_out, ".seq",  "wt");
+ readNumber = 0; 
+ //for each line in the input file perform base call based on the mode specified.
+ while (fgets (line, sizeof(line), allObssF) != NULL) {
+	double* obss;
+	double*    params;
+	int*    seq;
+	int		obssLen;
+	int		seqLen;
+	double lik ;
+	lik=0;
+	obss = malloc(sizeof(double)*sizeof(line));
+	char *saveptr1;
+
+	double		v;
+	char		extra;
+	const char s[2] = " ";
+	char* temp_num;
+	temp_num = strtok_r(line,s,&saveptr1);//split string
+	int e_num = 0;
+	while(temp_num != NULL)
+    	{
+ 		double tmp_d=atof(strdup(temp_num));
+        	obss[e_num] = tmp_d;
+	        temp_num = strtok_r(NULL,s,&saveptr1);
+	        e_num++;
+	}
+        obssLen=e_num;
+	if (obss == NULL) break;
+  	readNumber++;
+	debugObssLength_1;
+	zero_trim_observations (obss, &obssLen);
+	debugObssLength_2;
+	params = malloc(obssLen * sizeof(double));
+	
+	if(arg->mode==CONST){
+		fill_trend(params,obssLen,arg->sd_start,arg->sd_trend) ; 
+		seq = viterbi (obss, obssLen, params, arg->washSequence, &seqLen);
+	}else if(arg->mode==INTERCEPT){
+		find_optimal_const_sigma(obss, obssLen, params, arg->washSequence,0,0.2,10);
+		seq = viterbi (obss, obssLen, params, arg->washSequence, &seqLen);
+	}else if(arg->mode==TREND_ONLY){
+		lik=find_optimal_trend_only(obss, obssLen, params, arg->washSequence,arg->sd_start,0,0.0005,10);
+		seq = viterbi (obss, obssLen, params, arg->washSequence, &seqLen);
+	}else if(arg->mode==GREEDY){
+		lik=find_optimal_trend_greedy(obss, obssLen, params, arg->washSequence,0.03,0.0002,0.001*arg->step_size,0.00001*arg->step_size);
+		seq = viterbi (obss, obssLen, params, arg->washSequence, &seqLen);
+	}else{ // mode is trend 
+		lik=find_optimal_trend_sigma(obss, obssLen, params, arg->washSequence,0,0.1,0,0.0005,10,20);
+		seq = viterbi (obss, obssLen, params, arg->washSequence, &seqLen);
+	}
+	fprintf(likF,"%f\t%f\t%f\n",params[0],params[1]-params[0],lik);
+		debugSeqLength_1
+	write_flow_as_nts (seqF, seq, seqLen, arg->washSequence);
+	free (params);
+	free (obss);
+	free (seq);
+	fflush(likF);
+	fflush(seqF);	
+		 
+  }
+
 	fclose (allObssF);
 	fclose (likF);
 	fclose (seqF);
 
-	return EXIT_SUCCESS;
+	pthread_exit(0);
+	return 0;
+}
+
+//Splits the input flowgram file into smaller chunks, the number of chunks is equal to the number of threads.
+//Generates a subset file which includes 1% of the sequences taken from equal intervals in the input flogram.
+
+
+void split_sff (int parts, char* filename, char* chunk_names[], double percent )
+{
+
+	
+	unsigned long line_count=count_lines(filename);
+	double chunk_size= ceil (line_count/parts);
+	double diff_count= line_count%parts;
+//	double percent= 1;
+	double lines_per_percent=ceil((line_count*percent)/100);
+	double interval_line=ceil(line_count/lines_per_percent);
+	int j,k,l;
+	FILE *ss_infile=fopen(filename, "rt");
+	char filename_tmp[100];
+	sprintf(filename_tmp, "%s_subsample", filename);
+	FILE *subfile=fopen(filename_tmp,"wt");
+	int ss_size = 1024;
+	int ss_pos;
+	int ss_c;
+	char *ss_buffer = (char *)malloc(ss_size);
+        int check=0; 
+	for(l=0;l<line_count;l++){
+	   ss_pos = 0;
+   		do{ // read one line
+		     ss_c = fgetc(ss_infile);
+	             if(ss_c != EOF) ss_buffer[ss_pos++] = (char)ss_c;
+	             
+		     if(ss_pos >= ss_size - 1) { // increase buffer length - leave room for 0
+	                  ss_size *=2;	
+		          ss_buffer = (char*)realloc(ss_buffer, ss_size);
+          	     }
+	        }while(ss_c != EOF && ss_c != '\n');
+	        
+	        check++;
+	        
+	        ss_buffer[ss_pos] = 0;
+	        if((check+1)==interval_line){
+	 		 fputs(ss_buffer,subfile);		   	
+	 		 check=0;
+		}	 
 	}
+	fclose(ss_infile);
+	fclose(subfile);
+	
+	FILE *insff=fopen(filename, "rt");
+	if (insff == NULL){
+	 exit(EXIT_FAILURE);	
+	} 
+	double no_lines;
+	for( j=0; j<parts; j++){
+		char filename_chunk[100];
+		sprintf(filename_chunk, "%s_%03d", filename,j);
+		size_t len = 0;
+		chunk_names[j]=filename_chunk;
+		FILE *sffchunk=fopen(filename_chunk, "wt");
+		if (sffchunk == NULL){
+	           exit(EXIT_FAILURE);	
+	        }   
+		
+		if(j==(parts-1)){
+		  no_lines=chunk_size+diff_count;
+		} else{
+		  no_lines=chunk_size;
+		} 
+	
+	char * line = NULL;
+        size_t lent = 0;
+        ssize_t read;
+        int pos, size = 1024;
+	int c;
+        char *buffer = (char *)malloc(size);
+        for(k=0; k<no_lines; k++){
+   	
+   		pos = 0;
+   		do{ // read one line
+		     c = fgetc(insff);
+	             if(c != EOF) buffer[pos++] = (char)c;
+	             
+		     if(pos >= size - 1) { // increase buffer length - leave room for 0
+	                  size *=2;	
+		          buffer = (char*)realloc(buffer, size);
+          	     }
+	        }while(c != EOF && c != '\n');
+	        buffer[pos] = 0;
+	  fputs(buffer,sffchunk);		   	
+ 	}
+ 	
+ 	fclose(sffchunk);
+ 	 	
+	}
+	fclose(insff);
+	
+	
+
+}	
+	
 
 
-	
-	
-	
+
+// count the number of lines
+unsigned long count_lines(char *filename) {
+    FILE *fh = fopen(filename, "r");
+    unsigned long line_count = 0;
+    int c;
+    c=getc(fh);
+//    printf("open %s filename\n", filename);
+    while(c!= EOF)
+    {
+  	if(c=='\n'){
+	   line_count++;
+	}
+	c=getc(fh);     
+    }
+     return line_count;
+}
+
+
+// combine all the .seq files from different threads into one large file.
+void join_seq(char* out_file, int n)
+{
+  FILE *OUT;
+  char out_name[30];
+  sprintf(out_name,"%s.seq",out_file);
+  OUT=fopen(out_name,"wt");
+  if( OUT == NULL )
+   {
+      perror("Error ");
+      exit(EXIT_FAILURE);
+   } 
+  int i;
+  for(i=0; i<n; i++){
+   char ch,filename_chunk[100];
+   sprintf(filename_chunk, "%s_%03d.seq", out_file,i); // change ext for different files
+   FILE * ft;
+   ft = fopen(filename_chunk,"rt");
+    
+   if( ft == NULL )
+   {
+      perror("Error ");
+      exit(EXIT_FAILURE);
+   } 	
+   while( ( ch = fgetc(ft) ) != EOF )
+   {
+     fputc(ch,OUT);
+   }
+   fclose(ft);
+  }
+  fclose(OUT);
+
+}
+
+// combine all the .lik files from different threads into one large file.
+void join_lik(char* out_file, int n)
+{
+  FILE *OUT;
+  char out_name[30];
+  sprintf(out_name,"%s.lik",out_file);
+  OUT=fopen(out_name,"wt");
+  if( OUT == NULL )
+   {
+      perror("Error ");
+      exit(EXIT_FAILURE);
+   } 
+  int i;
+  for(i=0; i<n; i++){
+   char ch,filename_chunk[100];
+   sprintf(filename_chunk, "%s_%03d.lik", out_file,i); // change ext for different files
+   FILE * ft;
+   ft = fopen(filename_chunk,"rt");
+    
+   if( ft == NULL )
+   {
+      perror("Error ");
+      exit(EXIT_FAILURE);
+   } 	
+   while( ( ch = fgetc(ft) ) != EOF )
+   {
+     fputc(ch,OUT);
+   }
+   fclose(ft);
+  }
+  fclose(OUT);
+
+}
+
+//deletes the flowgram chunks created by split_sff() function.
+void delete_chunks(char* out_file, int n)
+{
+  int i;
+  for(i=0; i<n; i++){
+    char seq_fn[30];
+    sprintf(seq_fn,"%s_%03d",out_file,i);
+    if( remove(seq_fn) != 0){
+     printf("Unable to delete chunk files: %s", seq_fn);
+    }
+    
+  }
+  char seq_op[50];
+  sprintf(seq_op,"%s_subsample",out_file);
+    if( remove(seq_op) != 0){
+     printf("Unable to delete subsample file: %s", seq_op);
+    }
+    
+
+}
+
+//deletes all the intermediate files generated by different threads.
+void delete_intermediates(char* out_file, int n)
+{
+  int i;
+  for(i=0; i<n; i++){
+    char seq_fn[30];
+    sprintf(seq_fn,"%s_%03d.seq",out_file,i);
+    char lik_fn[30];
+    sprintf(lik_fn,"%s_%03d.lik",out_file,i);
+    if( remove(seq_fn) != 0){
+     printf("Unable to delete .seq files");
+    }
+    if(remove(lik_fn) != 0){
+     printf("Unable to delete .lik files");
+    } 
+  }
+
+}
 
 void fill_const
 	(double* params,
@@ -526,9 +1010,85 @@ double find_optimal_trend_greedy
 	}
 		
 	fill_trend(params, obssLen, intercept, trend); 
-	printf("%d\n",c);
+	printf("%f\t%f\n",intercept,trend); //now printing this
+	//printf("%d\n",c); previously printing this
 	return(lik);
 }	
+
+//dupliccated the find_optimal_trend_greedy() function and modified it to get the intercept and trend instead of likely hood value.
+void return_optimal_trend_intercept_greedy
+	(double* obss,
+	 int obssLen,
+	 double* params, // this is the output 
+	 char* washSequence,
+	 double int_start, 
+	 double trend_start,
+	 double int_step,
+	 double trend_step,
+	 double *intercept_return,
+	 double *trend_return 	 
+	)
+{
+	
+	double max_lik,curr_sigma,lik ;
+	double intercept;
+	double trend; 
+	double maximizers[2] ; 
+	double res1,res2,res3,res4; 
+	int found_better ; 
+	int c;
+	c=0; 
+	intercept=int_start; 
+	trend=trend_start ; 
+	fill_trend(params, obssLen, intercept, trend); 
+	lik = forward(obss,obssLen,params,washSequence);
+	while(true){
+		c++; 
+		fill_trend(params, obssLen, intercept, trend - trend_step); 
+		res3 = forward(obss,obssLen,params,washSequence);
+		if(res3 > lik){
+			lik =res3 ; 
+			found_better=true; 
+			trend = trend - trend_step ; 
+			continue ; 
+		}
+		fill_trend(params, obssLen, intercept, trend + trend_step); 
+		res4 = forward(obss,obssLen,params,washSequence);
+		if(res4 > lik){
+			lik =res4 ; 
+			found_better=true; 
+			trend = trend + trend_step ; 
+			continue ; 
+		}
+		found_better=false; 
+		fill_trend(params, obssLen, intercept-int_step, trend); 
+		res1 = forward(obss,obssLen,params,washSequence);
+		if(res1 > lik){
+			lik =res1 ; 
+			found_better=true; 
+			intercept = intercept - int_step ; 
+			continue ; 
+		}
+		fill_trend(params, obssLen, intercept+int_step, trend); 
+		res2 = forward(obss,obssLen,params,washSequence);
+		if(res2 > lik){
+			lik =res2 ; 
+			found_better=true; 
+			intercept = intercept + int_step ; 
+			continue ; 
+		}
+//		printf("%f %f %f %f %f\n", lik, res1 ,res2 ,res3, res4);
+		if(found_better==false){break;}
+	}
+		
+	//fill_trend(params, obssLen, intercept, trend); 
+	*intercept_return=intercept;
+	*trend_return=trend;
+	//printf("%f\t%f\n",intercept,trend); //now printing this
+	//printf("%d\n",c); previously printing this
+//	return(lik);
+}	
+
 
 double find_optimal_trend_only
 	(double* obss,
