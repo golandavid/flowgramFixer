@@ -1,6 +1,55 @@
 flowgramFixer
 =============
 
-FlowgramFixer is a base calling utility for IonTorrent SFF files 
+FlowgramFixer is an improved basecaller for the IonTorrent sequencing platform, which reduces error rates, and generates more uniquely aligned reads and more high quality reads than the default base calling algorithm implemented by IonTorrent in TorrentSuite. It is free and open source.  FlowgramFixer was developed by David Golan, Bob Harris, Paul Medvedev, Rahul Vagesna. If you use FlowgramFixer, please cite:
+Golan, D. and Medvedev, P. "Using State Machines to Model the IonTorrent Sequencing Process and Improve Read Error-Rates", Bioinformatics (Proceedings of ISMB/ECCB 2013}.
 
-For step's to install and run flowgramFixer, please visit: https://sites.google.com/site/davidgolanshomepage/flowgramfixer
+To use FlowgramFixer, follow these steps:
+
+* Step 1 - extract flowgrams from SFF files
+We use a haskell utility called flower to extract the flowgrams from an SFF file. This is done by running the command:
+
+flower yourfile.sff | awk 'NR%6==3' | cut -f2 > yourfile.flowgram
+
+where yourfile.sff is the input SFF file. This command generates yourfile.flowgram, which is a file where each line represents the flowgram of a different well.
+Alternatively, you can use any other tools which can convert SFF files into a text file. Please see sample.flowgram for an example of what kind of input file is expected.
+In particular, if you're running an IonTorrent server, you can use the SFFRead utility installed on your server. 
+
+Step 2 - Download and Compile FlowgramFixer
+FlowgramFixer source code can be downloaded from 
+
+https://github.com/golandavid/flowgramFixer
+
+Copy the code to your directory and compile by running:
+
+./make
+
+Step 3 - Run FlowgramFixer
+You can run FlowgramFixer using the default parameters as follows:
+
+flowgramFixer -i incorporation_file -o output_file 
+
+where:
+- incorporation_file is the file of extracted flowgrams from step 1.
+- output_file is the prefix of the output files. FlowgramFixer will create two output files: output.lik and output.seq. The *.seq file contains the called sequences and the *.lik contains the estimated parameters and their likelihood.
+
+Some of the options are: 
+-d: a string (either exp or normal) stating which error distribution to be used (either double exponential or normal).
+-m: a string telling flowgramFixer which optimization algorithm to use for the maximum-likelihood estimation. Can be set to greedy (greedy search) or trend (grid search) or const.
+In const mode, the user must specify the noise model using the -x and -y parameters. 
+These give the intercept and trend values of the noise model, respectively.
+
+A few minor comments
+- The current version handles the primer key as if it was part of the sequence. Therefore, if your key is TACG, you'll see that all reads in the .seq file start with TACG. 
+Use the cut command (cut -c 5- output.seq) to remove the first 4 bases of each sequence prior to any downstream application, or use the -5 flag  if you're aligning the output using bowtie. 
+
+To test that FlowgramFixer works correctly, you can run
+
+flowgramFixer -i sample.flowgram -o test
+
+and check that test.seq and sample.seq are the same.
+
+Questions, comments and requests can be directed to David Golan, davidgo5 at post dot tau dot ac dot il
+
+
+
