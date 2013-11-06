@@ -22,14 +22,14 @@ Copy the code to your directory and compile by running:
 
 ./make
 
-* Step 3 - Run FlowgramFixer
+* Step 3 - Run Flowgramfixer
 You can run FlowgramFixer using the default parameters as follows:
 
-flowgramFixer -i incorporation_file -o output_file 
+flowgramfixer -i incorporation_file -o output_file 
 
 where:
 - incorporation_file is the file of extracted flowgrams from step 1.
-- output_file is the prefix of the output files. FlowgramFixer will create two output files: output.lik and output.seq. The *.seq file contains the called sequences and the *.lik contains the estimated parameters and their likelihood.
+- output_file is the prefix of the output files. FlowgramFixer will create two output files: output.lik and output.fa. The *.fa file contains the called sequences in FASTA format and the *.lik contains the estimated parameters and their likelihood.
 
 Some of the options are: 
 -d: a string (either exp or normal) stating which error distribution to be used (either double exponential or normal).
@@ -40,7 +40,7 @@ A few minor comments
 
 To test that FlowgramFixer works correctly, you can run
 
-flowgramFixer -i sample.flowgram -o test
+flowgramfixer -i sample.flowgram -o test
 
 and check that test.fa and sample.fa are the same.
 
