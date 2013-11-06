@@ -192,16 +192,17 @@ static void usage
 	fprintf (stderr, "\n");
 	fprintf (stderr, " -i \t incorporation_file is space delimited file of incorporation sequences\n");
 	fprintf (stderr, " -o \t output_file is the prefix for all output files\n");
-	fprintf (stderr, " -d \t dist is the distribution to be used in the likelihood (exp/normal)\n");
-	fprintf (stderr, " -m \t can be greedy/trend/const (greedy is greedy search, trend is grid search, const is user defined)\n");
-	fprintf (stderr, " -s \t is an additional parameter for the greedy algorithm (step size - default is 1, larger step size runs faster) \n");
-	fprintf (stderr, " -p \t percentage of sequences used to generate the intercept and trend, additional parameter for greedy algorithm\n");
-	fprintf (stderr, " -x \t the  intercept for the noise model of all the reads, set when mode is const\n");
-	fprintf (stderr, " -y \t the  trend for the noise model of all the reads, set when mode is const\n");	
-	fprintf (stderr, " -t \t number of threads used to run the program (default is 5)\n");
-	fprintf (stderr, " -l \t generate preprocessed maximum likelihood values\n");
+	fprintf (stderr, " -d \t exp/normal distribution to be used in the likelihood, (default value is normal)\n");
+	fprintf (stderr, " -m \t greedy/trend/const , algorithm being used(greedy is greedy search, trend is grid search, const is user defined), default is greedy\n");
+	fprintf (stderr, " -s \t additional parameter for greedy algorithm (step size - default is 1, larger step size runs faster) \n");
+	fprintf (stderr, " -p \t additional parameter for greedy algorithm, percentage of sequences used to generate the intercept and trend (default value is 1)\n");
+	fprintf (stderr, " -x \t set when mode is const, the  intercept for the noise model of all the reads \n");
+	fprintf (stderr, " -y \t set when mode is const, the  trend for the noise model of all the reads (default is 0)\n");	
+	fprintf (stderr, " -t \t number of threads used to run the program (default is 1)\n");
+	fprintf (stderr, " -l \t generate preprocessed maximum likelihood values (default is YES)\n");
 	fprintf (stderr, " -w \t define the washcycle in lower case, default value is 'tacgtacgtctgagcatcgatcgatgtacagc' \n");
-	
+	fprintf (stderr, " -v \t YES/NO/ADVANCE; YES prints status info, ADVANCE prints status info and keeps all intermediate files, NO does not print any info, useful to debug (default is NO)\n");
+	fprintf (stderr, "\n");
 	exit (EXIT_FAILURE);
 	}
 
@@ -262,25 +263,27 @@ static void usage
 //--- main ---
 int  main (int argc, char **argv)
 {
-  print_time();
+  
+  
   //initialize and read the command line parameters
   char *inputflag = NULL;
   char *outputflag = NULL;
-  char *dist_flag = NULL;
-  char *mode_flag = NULL;
+  char *dist_flag = "normal";
+  char *mode_flag = "greedy";
   char *percent_flag = "1";
-  char *threadflag= "5";
+  char *threadflag= "1";
   char *stepsize_flag="1";
   char *intercept_flag=NULL;
   char *trend_flag=NULL;
-  char *ml_matrix_flag="NO";
+  char *ml_matrix_flag="YES";
   char *washcycle_flag=defaultWashSequence;
+  char *verbose_flag="NO";
   int index;
   int c;
   opterr = 0;
   
   // reading all the arguments frrom the command line
-  while ((c = getopt (argc, argv, "i:o:d:m:p:t:x:y:s:l:w:")) != -1){
+  while ((c = getopt (argc, argv, "i:o:d:m:p:t:x:y:s:l:w:v:")) != -1){
     switch (c)
     {
       case 'i':
@@ -316,6 +319,9 @@ int  main (int argc, char **argv)
       case 'w':
         washcycle_flag = optarg;
         break;
+      case 'v':
+        verbose_flag = optarg;
+        break;
       case '?':
         if (optopt == 'i') {
             fprintf (stderr, "Option -%c missing an argument, please enter input file name.\n", optopt);
@@ -350,6 +356,9 @@ int  main (int argc, char **argv)
 	} else if (optopt == 'l') {
             fprintf (stderr, "Option -%c missing an argument, requires YES/NO.\n", optopt);
             abort ();
+        } else if (optopt == 'v') {
+            fprintf (stderr, "Option -%c missing an argument, requires YES/NO.\n", optopt);
+            abort ();
         } else if (isprint (optopt)) {
             fprintf (stderr, "Unknown option `-%c'.\n", optopt);
             abort ();
@@ -371,6 +380,7 @@ int  main (int argc, char **argv)
   char*	 outputTemplate;
   int	 readNumber;
   char*  ml_tag;
+  int  verb_tag;
   double step_size;  
 	
   if (inputflag == NULL) {
@@ -383,16 +393,6 @@ int  main (int argc, char **argv)
     usage (argv[0]);
     abort ();
   }
-  if (dist_flag == NULL) {
-    printf ("ERROR: -d flag is missing\n");
-    usage (argv[0]);
-    abort ();
-  }
-  if (mode_flag == NULL) {
-    printf ("ERROR: -m flag is missing\n");
-    usage (argv[0]);
-    abort ();
-  }
 	
   
   if( access( inputflag, F_OK ) != -1 ) {
@@ -400,7 +400,7 @@ int  main (int argc, char **argv)
     // file exists
   } else {
     // file doesn't exist
-    printf("ERROR: Input file not found");
+    printf("ERROR: Input file not found\n");
     usage (argv[0]);
     abort ();
   }
@@ -456,9 +456,24 @@ int  main (int argc, char **argv)
       usage(argv[0]);
       abort ();
   }
+ //// parse the verbose_flag
+    if (strcasecmp (verbose_flag,"YES") == 0) {
+      verb_tag=1; 
+  } else if (strcasecmp (verbose_flag,"NO") == 0) {
+      verb_tag=0; 
+  } else if (strcasecmp (verbose_flag,"ADVANCE") == 0) {
+      verb_tag=2; 
+  }else {
+      printf("ERROR: -v flag invalid value\n");
+      usage(argv[0]);
+      abort ();
+  }
+
   //// print the mode and distribution used.	
-  printf("Using the %s distribution (%d) with mode %s (%d)\n",dist_flag,dist,mode_flag,mode);
-  
+  if (verb_tag>=1) {
+   print_time();
+   printf("Using the %s distribution (%d) with mode %s (%d)\n",dist_flag,dist,mode_flag,mode);
+  }
   //// can add gcContenet and washSequence as parameters in fututre
   gcContent = 0.5;
   washSequence = washcycle_flag;
@@ -478,18 +493,25 @@ int  main (int argc, char **argv)
   // the subsample file has the same input file name followed by subsample
   char* sffchunks[NUM_THREADS];
   int maxLen=0;
-  printf("Splitting Input file...\n ");
+  if (verb_tag>=1) {
+    printf("Splitting Input file...\n ");
+  }
+  
   split_sff(NUM_THREADS,allObssFilename,sffchunks, percent_seq,&maxLen);
-  printf("max length of flow= %d\n",maxLen);
-  print_time();
+  if (verb_tag>=1) {
+   printf("max length of flow= %d\n",maxLen);
+   print_time();
+  }
   //Obtain the mean intercept and trend from subsample of the input flowgram.
   // implemented only for GREEDY mode.
 
   if (mode==GREEDY) {
-    printf("Generating Likelihood Matrix....\n ");
-    printf ("Averaged from %f%% of the data: \n",percent_seq);
+    if (verb_tag>=1) {
+     printf("Generating Likelihood Matrix....\n ");
+     printf ("Averaged from %f%% of the data: \n",percent_seq);
+    } 
     get_ml_estimates(allObssFilename,step_size,washSequence,&sample_intercept,&sample_trend);
-    print_time();
+    if (verb_tag>=1) {  print_time(); }
     sd_start=sample_intercept;
     sd_trend=sample_trend;
    //// the program uses the trend and intercept from subsample and process the whole input file.
@@ -498,7 +520,7 @@ int  main (int argc, char **argv)
   }
   
   if (mode==CONST) {
-    printf("intercept\t%.11f\ntrend\t%.11f\n",sd_start,sd_trend);
+    if (verb_tag>=1) { printf("intercept\t%.11f\ntrend\t%.11f\n",sd_start,sd_trend); }
    //// The maximum likelihood values for all possible observations 0.01 to 12.99 were caliculated at different positions in the flowgram.
     prep=generate_lh_table(sd_start,sd_trend,maxLen,dist);  
   }
@@ -511,8 +533,7 @@ int  main (int argc, char **argv)
   pthread_attr_t attr;
   pthread_attr_init(&attr);
   pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
-  
-  printf("Processing using threads.....\n "); 	
+  if (verb_tag>=1) { printf("Processing using threads.....\n "); }	
   //Perform base calling using multiple threads
   for (id=0; id<NUM_THREADS; id++) {
     char * washSeq= washSequence;	     
@@ -551,12 +572,15 @@ int  main (int argc, char **argv)
   }      
 
   //Joining the output files generated by each individual thread		
+  
   join_seq(outputTemplate,NUM_THREADS);   
   join_lik(outputTemplate,NUM_THREADS);
-  print_time(); 
+  if (verb_tag>=1) {  print_time(); }
   //Deleting the intermediate files
-  delete_chunks(allObssFilename,NUM_THREADS);
-  delete_intermediates(outputTemplate,NUM_THREADS);
+  if (verb_tag<2){
+    delete_chunks(allObssFilename,NUM_THREADS);
+    delete_intermediates(outputTemplate,NUM_THREADS);
+  }
   pthread_exit(NULL);
  
   return EXIT_SUCCESS;
@@ -667,7 +691,7 @@ prep_matrix generate_lh_table(double intercept, double trend, int maxlen, int di
 } 
 
 // This is the function which is called in each thread
-// It process each chunk independently writes the resulting output to output_0NN.lik and outpt_0NN.seq files
+// It process each chunk independently writes the resulting output to output_0NN.lik and outpt_0NN.fa files
 // 
 void *thread_call( void *targ)
 {
@@ -686,7 +710,7 @@ void *thread_call( void *targ)
   allObssF = open_file (arg->chunk_in, NULL, "rt");
   init_read_line (&allObssState, arg->chunk_in);
   likF    = open_file (arg->chunk_out, ".lik", "wt");
-  seqF     = open_file (arg->chunk_out, ".seq",  "wt");
+  seqF     = open_file (arg->chunk_out, ".fa",  "wt");
   readNumber = 0; 
   //for each line in the input file perform base call based on the mode specified.
   while (fgets (line, sizeof(line), allObssF) != NULL) {
@@ -738,6 +762,7 @@ void *thread_call( void *targ)
     
     fprintf(likF,"%f\t%f\t%f\n",params[0],params[1]-params[0],lik);
     debugSeqLength_1
+    fprintf(seqF,">File: %s Line: %d\n", arg->chunk_in,readNumber);
     write_flow_as_nts (seqF, seq, seqLen, arg->washSequence);
     free (params);
     free (obss);
@@ -873,12 +898,12 @@ unsigned long count_lines(char *filename) {
 }
 
 
-// combine all the .seq files from different threads into one large file.
+// combine all the .fa files from different threads into one large file.
 void join_seq(char* out_file, int n)
 {
   FILE *OUT;
   char out_name[100];
-  sprintf(out_name,"%s.seq",out_file);
+  sprintf(out_name,"%s.fa",out_file);
   OUT=fopen(out_name,"wt");
   if ( OUT == NULL ) {
     perror("Error ");
@@ -887,7 +912,7 @@ void join_seq(char* out_file, int n)
   int i;
   for(i=0; i<n; i++){
     char ch,filename_chunk[100];
-    sprintf(filename_chunk, "%s_%03d.seq", out_file,i); // change ext for different files
+    sprintf(filename_chunk, "%s_%03d.fa", out_file,i); // change ext for different files
     FILE * ft;
     ft = fopen(filename_chunk,"rt");
     if ( ft == NULL ) {
@@ -964,11 +989,11 @@ void delete_intermediates(char* out_file, int n)
   
   for(i=0; i<n; i++){
     char seq_fn[100];
-    sprintf(seq_fn,"%s_%03d.seq",out_file,i);
+    sprintf(seq_fn,"%s_%03d.fa",out_file,i);
     char lik_fn[100];
     sprintf(lik_fn,"%s_%03d.lik",out_file,i);
     if( remove(seq_fn) != 0){
-     printf("Unable to delete .seq file: %s\n",seq_fn);
+     printf("Unable to delete .fa file: %s\n",seq_fn);
     }
     if(remove(lik_fn) != 0){
      printf("Unable to delete .lik file: %s\n",lik_fn);
