@@ -42,7 +42,7 @@ To test that FlowgramFixer works correctly, you can run
 
 flowgramFixer -i sample.flowgram -o test
 
-and check that test.seq and sample.seq are the same.
+and check that test.fa and sample.fa are the same.
 
 Questions, comments and requests can be directed to David Golan, davidgo5 at post dot tau dot ac dot il
 
