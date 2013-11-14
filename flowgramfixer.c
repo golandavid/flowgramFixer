@@ -1714,29 +1714,23 @@ static void one_step_prepros
 		   int  pos= (int)tmp_std;	
  		   if(lik_without_incorp_matrix[pos/10][washIndex] ){
 		   // printf(".");
-		    p[0]=lik_without_incorp_matrix[pos/10][washIndex];
-		   
- 		   }else{
-		    p[0] = obs_given_no_incorp (obs,param,dist);
+		      p[0]=lik_without_incorp_matrix[pos/10][washIndex];
+		   } else {
+		      p[0] = obs_given_no_incorp (obs,param,dist);
   		   }
 		
-		  if(lik_with_incorp_matrix[pos/10][nt2num(wash)][washIndex]){
-		  //printf("+"); 
-		    p[1]=lik_with_incorp_matrix[pos/10][nt2num(wash)][washIndex];
-		    //whichMax[1]=whichMax_matrix[(int)(obs*100)][nt2num(wash)][washIndex];
-			 int wm=whichMax_matrix[pos/10][nt2num(wash)][washIndex];
-			 double tp=obs_given_incorp    (obs, wash, &whichMax[1],param,dist);
-			if(p[1]!=tp){
-			//printf("%f \t %f\t %f\t %c\t%d\t%d\t%d\t %d\t%d\n",p[1],tp,obs,wash,washIndex,wm,whichMax[1],pos,pos/10);
-			}
-		  }else{
-		    p[1] = obs_given_incorp    (obs, wash, &whichMax[1],param,dist);
-		  }
+		   if(lik_with_incorp_matrix[pos/10][nt2num(wash)][washIndex]){
+		   //printf("+"); 
+		      p[1]=lik_with_incorp_matrix[pos/10][nt2num(wash)][washIndex];
+		      whichMax[1]=whichMax_matrix[pos/10][nt2num(wash)][washIndex];
+		   } else {
+		      p[1] = obs_given_incorp    (obs, wash, &whichMax[1],param,dist);
+		   }
 		}else if(ml_tag=="NO"){
-			p[0] = obs_given_no_incorp (obs,param,dist);
-			p[1] = obs_given_incorp    (obs, wash, &whichMax[1],param,dist);
-
+		   p[0] = obs_given_no_incorp (obs,param,dist);
+		   p[1] = obs_given_incorp    (obs, wash, &whichMax[1],param,dist);
 		}
+		
 		p[0] *= TRANS_PROBS[prevState][nextState[0]][nt2num(wash)];
 		p[1] *= TRANS_PROBS[prevState][nextState[1]][nt2num(wash)];
 		if (p[0] + p[1] == 0) continue;
